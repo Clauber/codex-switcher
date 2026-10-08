@@ -2,14 +2,16 @@
   <img src="src-tauri/icons/logo.svg" alt="Codex Switcher" width="128" height="128">
 </p>
 
-<h1 align="center">Codex Switcher</h1>
+<h1 align="center">AI Usage Tracker + Codex Switcher</h1>
 
 <p align="center">
-  A Desktop Application for Managing Multiple OpenAI <a href="https://github.com/openai/codex">Codex</a> Accounts<br>
-  Easily switch between accounts, monitor usage, schedule warm-ups, and stay in control of your quota
+  Track Claude Code, Zcode, and Codex usage in one dashboard.<br>
+  Keep your Codex account switching, warm-ups, and tray controls.
 </p>
 
 ## Features
+
+- **Multi-provider limits** – Claude subscription windows, model allowances, extra usage, and Zcode Coding Plan 5-hour, weekly, and monthly tool quotas, with remaining percentages and reset times
 
 - **Multi-Account Management** – Add, rename, mask, import, export, and manage multiple Codex accounts in one place
 - **Quick Switching** – Switch between accounts from the main window, native tray menu, or tray popup while preserving rotated ChatGPT sessions
@@ -99,6 +101,23 @@ Optional environment variables:
 
 The browser dashboard serves the same UI and backend actions through `/api/invoke/*`, which makes it usable over LAN, Tailscale, or a remote host tunnel when you expose the chosen port safely.
 
+## Provider usage
+
+The main dashboard reads the signed-in providers on the machine running the backend:
+
+- **Claude Code:** `~/.claude/.credentials.json` (or `CLAUDE_CONFIG_DIR`), with the default macOS Keychain as a fallback. `CLAUDE_CODE_OAUTH_TOKEN` overrides the stored access token. Sign in again in Claude Code if the session has expired; the tracker does not rotate or overwrite its credentials.
+- **Zcode:** personal Z.ai and BigModel Coding Plan keys in `~/.zcode/v2/credentials.json`. Encrypted values are read with Zcode's local credential key; run under the same user and, if configured, `ZCODE_CREDENTIAL_SECRET`. `AI_USAGE_ZCODE_CREDENTIALS_FILE` selects another credential file. `ZAI_API_KEY` and `BIGMODEL_API_KEY` are optional overrides. Team and Start Plan billing are not included.
+
+For a login on another machine, add `{"claude_ssh_host":"harness"}` to `~/.codex-switcher/provider-sources.json`. The host must be an existing SSH alias with a trusted host key and passwordless access; the remote machine needs Python 3. The tracker reads only the remote Claude OAuth entry in memory and does not persist it locally.
+
+Checks run every five minutes. Refreshes share a one-minute backend cache, and failed checks back off for five minutes. A failed refresh keeps the last successful snapshot visibly marked as stale; unknown usage is never displayed as zero. Credentials stay in the backend and are never returned to the browser. Provider endpoints and local credential formats may change between releases.
+
+Zcode quota fields follow the [provider's usage-query integration](https://github.com/zai-org/zai-coding-plugins/blob/main/plugins/glm-plan-usage/skills/usage-query-skill/scripts/query-usage.mjs) and [Coding Plan usage documentation](https://zcode.z.ai/en/docs/usage-stats). Claude's subscription usage endpoint is undocumented; parsing supports both legacy windows and the current structured limits list.
+
+The app identity and `~/.codex-switcher` storage directory stay the same, preserving saved Codex accounts. The tray popup shows Claude and Zcode 5-hour/weekly quotas above the Codex accounts; expand more limits for model, spending, and tool quotas. The macOS menu bar includes `Cl` (Claude) and `Z` (Zcode), showing the tighter remaining 5-hour/weekly quota. Expired or unavailable values show `--`.
+
+`pnpm lan` builds the browser backend without desktop GTK/WebKit dependencies. Rust and OpenSSL development headers are still required on Linux. The desktop build remains the default for `pnpm tauri`.
+
 ## Usage and Reset Credits
 
 Codex Switcher shows two kinds of account usage information:
@@ -185,6 +204,10 @@ This tool is designed **exclusively for individuals who personally own multiple 
 - Any form of account pooling or credential sharing
 
 By using this software, you agree that you are the rightful owner of all accounts you add to the application. The authors are not responsible for any misuse or violations of OpenAI's terms of service.
+
+## Updates
+
+This custom build has no in-app updater. Upstream Codex Switcher releases do not contain the provider tracker, so updates must be built and installed from this source. The upstream update feed, installer permissions, and update prompt are removed.
 
 ## Versioning
 

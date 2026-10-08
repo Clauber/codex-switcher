@@ -70,7 +70,7 @@ struct UnixProcessSnapshot {
 const CODEX_RUNNING_SWITCH_BLOCKED_PREFIX: &str = "Cannot switch accounts while ";
 
 /// Check for running Codex processes
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn check_codex_processes() -> Result<CodexProcessInfo, String> {
     let (pids, bg_count) = find_codex_processes().map_err(|e| e.to_string())?;
     let count = pids.len();
@@ -102,7 +102,7 @@ pub(crate) fn is_codex_running_switch_block(error: &str) -> bool {
 }
 
 /// Force-close active Codex processes that currently block account switching.
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn kill_codex_processes(
     reopen_desktop: Option<bool>,
 ) -> Result<KillCodexProcessesResult, String> {
@@ -1082,7 +1082,7 @@ where
 }
 
 /// Open the Codex desktop app if it is installed.
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn open_codex_app() -> Result<(), String> {
     tokio::task::spawn_blocking(open_codex_app_blocking)
         .await

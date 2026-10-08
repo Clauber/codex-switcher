@@ -70,7 +70,7 @@ struct SlimAccountPayload {
 }
 
 /// List all accounts with their info
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn list_accounts() -> Result<Vec<AccountInfo>, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
     let active_id = store.active_account_id.as_deref();
@@ -85,7 +85,7 @@ pub async fn list_accounts() -> Result<Vec<AccountInfo>, String> {
 }
 
 /// Get the currently active account
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn get_active_account_info() -> Result<Option<AccountInfo>, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
     let active_id = store.active_account_id.as_deref();
@@ -98,7 +98,7 @@ pub async fn get_active_account_info() -> Result<Option<AccountInfo>, String> {
 }
 
 /// Add an account from an auth.json file
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn add_account_from_file(path: String, name: String) -> Result<AccountInfo, String> {
     // Import from the file
     let account = import_from_auth_json(&path, name).map_err(|e| e.to_string())?;
@@ -127,7 +127,7 @@ pub async fn add_account_from_auth_json_text(
 }
 
 /// Switch to a different account
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn switch_account(account_id: String) -> Result<(), String> {
     switch_account_by_id(&account_id).await
 }
@@ -193,14 +193,14 @@ pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
 }
 
 /// Remove an account
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn delete_account(account_id: String) -> Result<(), String> {
     remove_account(&account_id).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// Rename an account
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn rename_account(account_id: String, new_name: String) -> Result<(), String> {
     crate::auth::storage::update_account_metadata(&account_id, Some(new_name), None, None, None)
         .map_err(|e| e.to_string())?;
@@ -209,14 +209,14 @@ pub async fn rename_account(account_id: String, new_name: String) -> Result<(), 
 
 /// Export minimal account config as a compact text string.
 /// For ChatGPT accounts, only refresh token is exported.
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn export_accounts_slim_text() -> Result<String, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
     encode_slim_payload_from_store(&store).map_err(|e| e.to_string())
 }
 
 /// Import minimal account config from a compact text string, skipping existing accounts.
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn import_accounts_slim_text(payload: String) -> Result<ImportAccountsSummary, String> {
     let slim_payload = decode_slim_payload(&payload).map_err(|e| format!("{e:#}"))?;
     let total_in_payload = slim_payload.accounts.len();
@@ -243,7 +243,7 @@ pub async fn import_accounts_slim_text(payload: String) -> Result<ImportAccounts
 }
 
 /// Export full account config as an encrypted file.
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn export_accounts_full_encrypted_file(path: String) -> Result<(), String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
     let encrypted =
@@ -259,7 +259,7 @@ pub async fn export_accounts_full_encrypted_bytes() -> Result<Vec<u8>, String> {
 }
 
 /// Import full account config from an encrypted file, skipping existing accounts.
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn import_accounts_full_encrypted_file(
     path: String,
 ) -> Result<ImportAccountsSummary, String> {
@@ -751,13 +751,13 @@ fn merge_accounts_store(
 }
 
 /// Get the list of masked account IDs
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn get_masked_account_ids() -> Result<Vec<String>, String> {
     crate::auth::storage::get_masked_account_ids().map_err(|e| e.to_string())
 }
 
 /// Set the list of masked account IDs
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn set_masked_account_ids(ids: Vec<String>) -> Result<(), String> {
     crate::auth::storage::set_masked_account_ids(ids).map_err(|e| e.to_string())
 }

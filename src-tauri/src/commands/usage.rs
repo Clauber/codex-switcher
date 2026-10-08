@@ -20,7 +20,8 @@ pub async fn fetch_usage(account_id: &str) -> Result<UsageInfo, String> {
 }
 
 /// Get usage info for a specific account
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
+#[cfg(feature = "desktop-app")]
 pub async fn get_usage(app: tauri::AppHandle, account_id: String) -> Result<UsageInfo, String> {
     let usage = fetch_usage(&account_id).await?;
 
@@ -36,7 +37,7 @@ pub async fn get_usage(app: tauri::AppHandle, account_id: String) -> Result<Usag
 /// Refresh account metadata for a specific account.
 /// For ChatGPT accounts this ensures OAuth tokens are valid and pulls live subscription metadata.
 /// For API key accounts this is a no-op.
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo, String> {
     let account = get_account(&account_id)
         .map_err(|e| e.to_string())?
@@ -69,14 +70,14 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
 }
 
 /// Refresh usage info for all accounts
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn refresh_all_accounts_usage() -> Result<Vec<UsageInfo>, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
     Ok(refresh_all_usage(&store.accounts).await)
 }
 
 /// Send a minimal warm-up request for one account
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn warmup_account(account_id: String) -> Result<(), String> {
     let account = get_account(&account_id)
         .map_err(|e| e.to_string())?
@@ -86,7 +87,7 @@ pub async fn warmup_account(account_id: String) -> Result<(), String> {
 }
 
 /// Send minimal warm-up requests for all accounts
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
     let total_accounts = store.accounts.len();

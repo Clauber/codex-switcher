@@ -3,9 +3,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAccounts } from "./hooks/useAccounts";
 import { useDesktopReopen } from "./hooks/useDesktopReopen";
 import { SettingsModal } from "./components/SettingsModal";
+import { ProviderUsagePanel } from "./components/ProviderUsagePanel";
+import { useProviderUsage } from "./hooks/useProviderUsage";
 import { finishForceClose, type DesktopReopenPreference } from "./lib/desktopReopen";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
-import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
+import { AccountCard, AddAccountModal } from "./components";
 import type { AccountWithUsage, CodexProcessInfo, DockDisplayMode, UsageInfo } from "./types";
 import {
   exportFullBackupFile,
@@ -63,7 +65,7 @@ type AutoWarmupLedger = Record<
     lastAutoWindowKind?: AutoWarmupWindowKind;
   }
 >;
-const appWindow = getCurrentWindow();
+const appWindow = isTauriRuntime() ? getCurrentWindow() : null;
 const isMacOs =
   typeof navigator !== "undefined" &&
   /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent);
@@ -186,6 +188,7 @@ function App() {
     saveMaskedAccountIds,
   } = useAccounts();
 
+  const providerUsage = useProviderUsage();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [configModalMode, setConfigModalMode] = useState<"slim_export" | "slim_import">(
@@ -386,14 +389,14 @@ function App() {
   const handleTitlebarDrag = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (!isTauriRuntime() || event.button !== 0) return;
-      void appWindow.startDragging();
+      void appWindow?.startDragging();
     },
     []
   );
 
   const handleTitlebarDoubleClick = useCallback(() => {
     if (!isTauriRuntime()) return;
-    void appWindow.toggleMaximize();
+    void appWindow?.toggleMaximize();
   }, []);
 
   const toggleMask = (accountId: string) => {
@@ -518,13 +521,13 @@ function App() {
   }, [themeMode]);
 
   useEffect(() => {
-    if (!isTauriRuntime() || isMacOs) return;
+    if (!appWindow || !isTauriRuntime() || isMacOs) return;
 
     let unlisten: (() => void) | undefined;
 
     const syncMaximizedState = async () => {
       try {
-        setIsWindowMaximized(await appWindow.isMaximized());
+        setIsWindowMaximized((await appWindow?.isMaximized()) ?? false);
       } catch (err) {
         console.error("Failed to read window state:", err);
       }
@@ -596,7 +599,7 @@ function App() {
     setIsRefreshing(true);
     setRefreshSuccess(false);
     try {
-      await refreshUsage(undefined, { refreshMetadata: true });
+      await Promise.all([refreshUsage(undefined, { refreshMetadata: true }), providerUsage.refresh()]);
       setRefreshSuccess(true);
       setTimeout(() => setRefreshSuccess(false), 2000);
     } finally {
@@ -1339,11 +1342,11 @@ function App() {
             onDoubleClick={handleTitlebarDoubleClick}
             className={`h-full flex-1 select-none cursor-default ${isMacOs ? "ml-18 mr-2" : "mr-3"}`}
           />
-          {!isMacOs && (
+          {isTauriRuntime() && !isMacOs && (
             <div className="flex items-center gap-1">
               <button
                 onClick={() => {
-                  void appWindow.minimize();
+                  void appWindow?.minimize();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
                 title="Minimize"
@@ -1354,7 +1357,7 @@ function App() {
               </button>
               <button
                 onClick={() => {
-                  void appWindow.toggleMaximize();
+                  void appWindow?.toggleMaximize();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
                 title={isWindowMaximized ? "Restore" : "Maximize"}
@@ -1372,7 +1375,7 @@ function App() {
               </button>
               <button
                 onClick={() => {
-                  void appWindow.close();
+                  void appWindow?.close();
                 }}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-red-500 hover:text-white dark:text-gray-400 dark:hover:bg-red-500 dark:hover:text-white"
                 title="Close"
@@ -1391,7 +1394,7 @@ function App() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">
-                    Codex Switcher
+                    AI Usage Tracker
                   </h1>
                   {processInfo && (
                     <div className="inline-flex items-center gap-1">
@@ -1711,6 +1714,8 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-5xl mx-auto px-6 pt-4 pb-8">
+        <ProviderUsagePanel providers={providerUsage.providers} loading={providerUsage.loading} error={providerUsage.error} onRefresh={providerUsage.refresh} />
+        <h2 className="mb-4 text-base font-semibold">Codex switcher</h2>
         {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <div className="animate-spin h-10 w-10 border-2 border-gray-900 dark:border-gray-100 border-t-transparent rounded-full mb-4"></div>
@@ -1993,7 +1998,7 @@ function App() {
               </p>
               {pendingSwitchAccount && (
                 <p className="text-sm text-gray-600 dark:text-gray-300">
-                  After closing Codex, Codex Switcher will switch to{" "}
+                  After closing Codex, AI Usage Tracker will switch to{" "}
                   <span className="font-medium text-gray-900 dark:text-gray-100">
                     {pendingSwitchAccount.name}
                   </span>
@@ -2062,12 +2067,12 @@ function App() {
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl w-full max-w-md mx-4 shadow-xl">
             <div className="p-5 border-b border-gray-100 dark:border-gray-800">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                Keep Codex Switcher in the Dock?
+                Keep AI Usage Tracker in the Dock?
               </h2>
             </div>
             <div className="p-5 space-y-4">
               <p className="text-sm text-gray-600 dark:text-gray-300">
-                When the window is closed, Codex Switcher can stay in the Dock or live only in the menu bar.
+                When the window is closed, AI Usage Tracker can stay in the Dock or live only in the menu bar.
               </p>
               <p className="text-sm text-gray-600 dark:text-gray-300">
                 You can always change this later from the tray popup.
@@ -2200,7 +2205,6 @@ function App() {
           </div>
         </div>
       )}
-      <UpdateChecker />
 
     </div>
   );

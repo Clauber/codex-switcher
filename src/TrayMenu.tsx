@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AccountInfo, AccountUsageStats, DockDisplayMode, UsageInfo } from "./types";
 import { invokeBackend, isTauriRuntime } from "./lib/platform";
+import { useProviderUsage } from "./hooks/useProviderUsage";
+import { ProviderUsagePanel } from "./components/ProviderUsagePanel";
 import {
   applyTheme,
   syncThemeFromStorage,
@@ -125,6 +127,7 @@ function retainUsageForAccounts(
 }
 
 function TrayMenu() {
+  const { providers, loading: providersLoading, error: providersError, refresh: refreshProviders } = useProviderUsage();
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
@@ -210,6 +213,7 @@ function TrayMenu() {
   }, []);
 
   const loadDockDisplayMode = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     try {
       const mode = await invokeBackend<DockDisplayMode | null>("get_dock_display_mode");
       setDockDisplayMode(mode);
@@ -234,9 +238,12 @@ function TrayMenu() {
     }
   }, [loadActiveStats, loadDockDisplayMode, loadUsage]);
 
+  useEffect(() => { void load(); }, [load]);
+
   // Manual refresh: re-pull accounts and actively fetch fresh usage once.
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
+    const providerRefresh = refreshProviders();
     try {
       const list = await invokeBackend<AccountInfo[]>("list_accounts");
       setAccounts(list);
@@ -246,9 +253,10 @@ function TrayMenu() {
     } catch (err) {
       setError(formatError(err));
     } finally {
+      await providerRefresh;
       setRefreshing(false);
     }
-  }, [loadActiveStats, loadUsage]);
+  }, [loadActiveStats, loadUsage, refreshProviders]);
 
   const handleAutoWarmupToggle = useCallback(async () => {
     const next = !autoWarmupAllEnabled;
@@ -296,6 +304,7 @@ function TrayMenu() {
         syncThemeFromStorage();
         setAutoWarmupAllEnabled(readAutoWarmupAllEnabled());
         void load();
+        void refreshProviders();
       });
       unlistenChanged = await listen(ACCOUNTS_CHANGED_EVENT, () => void load());
       unlistenTheme = await listen<ThemeMode>(THEME_CHANGED_EVENT, ({ payload }) => {
@@ -319,7 +328,7 @@ function TrayMenu() {
       unlistenTheme?.();
       unlistenAutoWarmup?.();
     };
-  }, [load]);
+  }, [load, refreshProviders]);
 
   const handleSwitch = useCallback(async (account: AccountInfo) => {
     if (account.is_active) {
@@ -357,9 +366,9 @@ function TrayMenu() {
     <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-gray-900 shadow-2xl dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100">
       <div className="flex items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-800">
         <div className="flex h-6 w-6 items-center justify-center rounded-md bg-black text-xs font-bold text-white">
-          C
+          AI
         </div>
-        <span className="text-sm font-semibold">Codex Switcher</span>
+        <span className="text-sm font-semibold">AI Usage Tracker</span>
         <button
           onClick={() => void handleAutoWarmupToggle()}
           disabled={accounts.length === 0}
@@ -378,17 +387,19 @@ function TrayMenu() {
         </button>
         <button
           onClick={() => void handleRefresh()}
-          disabled={refreshing}
+          disabled={refreshing || providersLoading}
           title="Refresh usage"
           className="flex h-6 w-6 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
         >
-          <span className={`text-base leading-none ${refreshing ? "inline-block animate-spin" : ""}`}>
+          <span className={`text-base leading-none ${refreshing || providersLoading ? "inline-block animate-spin" : ""}`}>
             ↻
           </span>
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-1.5">
+      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+        <ProviderUsagePanel compact providers={providers} loading={providersLoading} error={providersError} onRefresh={refreshProviders} />
+        <h2 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">Codex accounts</h2>
         {loading ? (
           <div className="px-2 py-6 text-center text-xs text-gray-500 dark:text-gray-400">
             Loading...
@@ -571,7 +582,7 @@ function TrayMenu() {
           onClick={() => void invokeBackend("open_main_window")}
           className="flex-1 rounded-lg px-2 py-1.5 text-left text-sm transition-colors hover:bg-gray-100 dark:hover:bg-gray-800"
         >
-          Open Codex Switcher
+          Open AI Usage Tracker
         </button>
         <button
           onClick={() => void invokeBackend("quit_app")}

@@ -10,15 +10,23 @@ default-run = "codex-switcher"
 name = "codex_switcher_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "codex-switcher"
+path = "src/main.rs"
+required-features = ["desktop-app"]
+
+[features]
+default = ["desktop-app"]
+desktop-app = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-opener", "dep:tauri-plugin-dialog", "dep:tauri-plugin-process"]
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
-tauri = { version = "2.10", features = ["tray-icon", "macos-private-api"] }
-tauri-plugin-opener = "2"
-tauri-plugin-dialog = "2.6"
-tauri-plugin-process = "2"
-tauri-plugin-updater = "2.10"
+tauri = { version = "2.10", features = ["tray-icon", "macos-private-api"], optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2.6", optional = true }
+tauri-plugin-process = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -38,6 +46,7 @@ futures = "0.3"
 url = "2"
 flate2 = "1"
 chacha20poly1305 = "0.10"
+aes-gcm = "0.10"
 pbkdf2 = "0.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]

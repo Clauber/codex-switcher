@@ -183,7 +183,7 @@ struct ResetCredit {
     description: Option<String>,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn get_account_usage_stats(account_id: String) -> Result<AccountUsageStats, String> {
     let store = load_accounts().map_err(|e| e.to_string())?;
     let account = store

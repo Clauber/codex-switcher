@@ -3,7 +3,7 @@
   "app": {
     "windows": [
       {
-        "title": "Codex Switcher",
+        "title": "AI Usage Tracker",
         "width": 900,
         "height": 700,
         "minWidth": 600,

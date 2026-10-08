@@ -24,6 +24,8 @@ use crate::{
 
 static TRAY_USAGE: LazyLock<Mutex<HashMap<String, UsageInfo>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static TRAY_PROVIDER_USAGE: LazyLock<Mutex<Vec<crate::provider_usage::ProviderUsage>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 static TRAY_SWITCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static TRAY_SWITCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -35,8 +37,8 @@ const SWITCH_ACCOUNT_BLOCKED_EVENT: &str = "switch-account-blocked";
 const ACCOUNT_ITEM_PREFIX: &str = "account:";
 const OPEN_ITEM_ID: &str = "open";
 const QUIT_ITEM_ID: &str = "quit";
-const TRAY_WIDTH: f64 = 300.0;
-const TRAY_HEIGHT: f64 = 420.0;
+const TRAY_WIDTH: f64 = 360.0;
+const TRAY_HEIGHT: f64 = 600.0;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,7 +67,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
 
     let builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
-        .tooltip("Codex Switcher")
+        .tooltip("AI Usage Tracker")
         .menu(&menu)
         .on_menu_event(handle_menu_event);
 
@@ -84,6 +86,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "windows")]
     watch_system_theme(app.clone());
     poll_active_account_usage(app.clone());
+    poll_provider_usage(app.clone());
     Ok(())
 }
 
@@ -234,7 +237,7 @@ fn create_tray_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     }
 
     let window = WebviewWindowBuilder::new(app, TRAY_WINDOW, WebviewUrl::App("tray.html".into()))
-        .title("Codex Switcher")
+        .title("AI Usage Tracker")
         .inner_size(TRAY_WIDTH, TRAY_HEIGHT)
         .resizable(false)
         .decorations(false)
@@ -337,7 +340,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, store: &AccountsStore) -> tauri::R
     append_dock_settings_menu(app, &menu)?;
     #[cfg(target_os = "macos")]
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItemBuilder::with_id(OPEN_ITEM_ID, "Open Codex Switcher").build(app)?)?;
+    menu.append(&MenuItemBuilder::with_id(OPEN_ITEM_ID, "Open AI Usage Tracker").build(app)?)?;
     menu.append(&MenuItemBuilder::with_id(QUIT_ITEM_ID, "Quit").build(app)?)?;
     Ok(menu)
 }
@@ -440,6 +443,7 @@ fn refresh_menu_on_main_thread<R: Runtime>(app: &AppHandle<R>) {
                 eprintln!("Failed to refresh tray menu: {error}");
             }
             refresh_tray_display(&tray, mode, title.as_deref());
+            let _ = tray.set_tooltip(Some("AI Usage Tracker — Cl: Claude, Z: Zcode, Cdx: Codex. Claude/Zcode show the lower remaining 5-hour or weekly quota. Click for all limits."));
         }
         Err(error) => eprintln!("Failed to build tray menu: {error}"),
     }
@@ -515,11 +519,23 @@ fn active_session_title(active_account_id: Option<&str>) -> Option<String> {
 }
 
 fn active_tray_title(active_account_id: Option<&str>, mode: TrayDisplayMode) -> Option<String> {
-    match mode {
+    if mode == TrayDisplayMode::Hidden { return None; }
+    let codex = match mode {
         TrayDisplayMode::IconAndSession => active_session_title(active_account_id),
-        TrayDisplayMode::ActiveUsageText => Some(active_usage_title(active_account_id)),
+        TrayDisplayMode::ActiveUsageText => active_account_id.map(|_| active_usage_title(active_account_id)),
         TrayDisplayMode::Hidden => None,
+    };
+    let mut parts = codex.map(|value| vec![format!("Cdx {value}")]).unwrap_or_default();
+    if let Ok(providers) = TRAY_PROVIDER_USAGE.lock() {
+        let now = chrono::Utc::now().timestamp();
+        for provider in providers.iter().filter(|p| p.status != "not_connected") {
+            let short = match provider.id.as_str() { "claude" => "Cl", "zcode-zai" => "Z", "zcode-bigmodel" => "BM", _ => continue };
+            let remaining = crate::provider_usage::tray_remaining(provider, now)
+                .map(|value| format!("{value:.0}%")).unwrap_or_else(|| "--".into());
+            parts.push(format!("{short} {remaining}"));
+        }
     }
+    Some(if parts.is_empty() { "AI Usage".into() } else { parts.join(" · ") })
 }
 
 fn active_usage_title(active_account_id: Option<&str>) -> String {
@@ -691,6 +707,16 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
         }
 
         std::thread::sleep(Duration::from_secs(60));
+    });
+}
+
+fn poll_provider_usage<R: Runtime>(app: AppHandle<R>) {
+    std::thread::spawn(move || loop {
+        if let Ok(providers) = tauri::async_runtime::block_on(crate::provider_usage::get_provider_usage()) {
+            if let Ok(mut cache) = TRAY_PROVIDER_USAGE.lock() { *cache = providers; }
+            refresh_menu(&app);
+        }
+        std::thread::sleep(Duration::from_secs(300));
     });
 }
 

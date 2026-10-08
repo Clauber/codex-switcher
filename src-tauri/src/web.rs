@@ -80,7 +80,7 @@ pub fn run_lan_server(host: &str, port: u16) -> anyhow::Result<()> {
         .join("..")
         .join("dist");
 
-    println!("Codex Switcher web server listening on http://{address}");
+    println!("AI Usage Tracker web server listening on http://{address}");
     println!("Serving static files from {}", dist_dir.display());
 
     for request in server.incoming_requests() {
@@ -128,6 +128,7 @@ fn handle_request(mut request: Request, runtime: &Runtime, dist_dir: &Path) -> a
 
 async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, String> {
     match command {
+        "get_provider_usage" => to_json(crate::provider_usage::get_provider_usage().await?),
         "list_accounts" => to_json(list_accounts().await?),
         "get_active_account_info" => to_json(get_active_account_info().await?),
         "add_account_from_file" => {

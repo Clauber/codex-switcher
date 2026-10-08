@@ -33,7 +33,7 @@ pub struct CodexReopenInfo {
     desktop_count: usize,
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn get_codex_reopen_info() -> Result<CodexReopenInfo, String> {
     tokio::task::spawn_blocking(|| {
         let (pids, _) = super::find_codex_processes().map_err(|e| e.to_string())?;
@@ -249,7 +249,7 @@ fn take_targets(
     Ok(pending.take().expect("validated ticket").targets)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn reopen_closed_codex_desktop(token: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let targets = take_targets(

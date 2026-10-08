@@ -20,7 +20,7 @@ struct PendingOAuth {
 static PENDING_OAUTH: Mutex<Option<PendingOAuth>> = Mutex::new(None);
 
 /// Start the OAuth login flow
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn start_login(account_name: String) -> Result<OAuthLoginInfo, String> {
     // Cancel any previous pending flow so it does not keep the callback port occupied.
     if let Some(previous) = {
@@ -44,7 +44,7 @@ pub async fn start_login(account_name: String) -> Result<OAuthLoginInfo, String>
 }
 
 /// Wait for the OAuth login to complete and add the account
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn complete_login() -> Result<AccountInfo, String> {
     let pending = {
         let mut pending = PENDING_OAUTH.lock().unwrap();
@@ -74,7 +74,7 @@ pub async fn complete_login() -> Result<AccountInfo, String> {
 }
 
 /// Cancel a pending OAuth login
-#[tauri::command]
+#[cfg_attr(feature = "desktop-app", tauri::command)]
 pub async fn cancel_login() -> Result<(), String> {
     let mut pending = PENDING_OAUTH.lock().unwrap();
     if let Some(pending_oauth) = pending.take() {

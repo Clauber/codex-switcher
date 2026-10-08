@@ -110,7 +110,7 @@ export function SettingsModal({ preference, onChange, onClose }: SettingsModalPr
                         <option value="show_in_dock">Show in Dock</option>
                         <option value="menu_bar_only">Menu Bar Only</option>
                       </select>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">At least one of the Dock or tray icons stays visible so you can reopen Codex Switcher.</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">At least one of the Dock or tray icons stays visible so you can reopen AI Usage Tracker.</p>
                     </>
                   )}
                 </>
