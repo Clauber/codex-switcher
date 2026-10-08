@@ -233,3 +233,21 @@ pnpm release patch -- --push
 # For non-interactive use, pass the note explicitly.
 pnpm release patch -- --push --note "Fixed account switching issues"
 ```
+
+### Harness account sync and T3 reload
+
+The installed usage tracker can synchronize account switches to a trusted SSH host
+and restart its managed T3 service. Opt in with `"codex_t3_ssh_host": "harness"`
+in `~/.codex-switcher/provider-sources.json` (preserve existing entries).
+
+The helper requires Python 3.11+, key-based SSH, the `t3code.service` user service,
+and T3's default Codex provider using `~/.codex` with file credential storage.
+It refuses the switch while any T3 task is running, queued, or waiting for approval.
+Once idle, it stops the whole T3 service, writes credentials privately, restarts it,
+and waits for a fresh authenticated provider check before selecting the account
+on the Mac. A failed verification restores the previous harness credentials.
+Credentials travel over SSH stdin and must never be logged. Other SSH targets are
+never discovered or selected automatically. There is no scheduled switch or retry.
+If the desktop remains on “reconnecting,” reload its window; the remote service
+and account have already been checked. Local account storage and other usage
+providers retain their existing behavior when the option is absent.

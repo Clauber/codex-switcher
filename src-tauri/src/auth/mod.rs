@@ -4,6 +4,7 @@ pub mod oauth_server;
 pub mod storage;
 pub mod switcher;
 pub mod token_refresh;
+pub mod t3_sync;
 
 // ponytail: refreshes are rare; one global lock keeps auth.json and accounts.json ordered.
 pub(crate) static AUTH_OPERATION_LOCK: tokio::sync::Mutex<()> =

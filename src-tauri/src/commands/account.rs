@@ -142,11 +142,15 @@ pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
         .position(|account| account.id == account_id)
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
-    if store.active_account_id.as_deref() == Some(account_id) {
+    let remote_host = crate::auth::t3_sync::configured_host().map_err(|e| e.to_string())?;
+    if store.active_account_id.as_deref() == Some(account_id) && remote_host.is_none() {
         return Ok(());
     }
 
     ensure_codex_not_running()?;
+    let remote_state = if let Some(host) = remote_host.as_deref() {
+        Some(crate::auth::t3_sync::probe(host).await.map_err(|e| e.to_string())?)
+    } else { None };
 
     // ChatGPT rotates single-use refresh tokens. Preserve the latest token
     // before replacing auth.json, otherwise switching back restores a stale one.
@@ -156,12 +160,28 @@ pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
         }
     }
 
+    if let Some(state) = &remote_state {
+        let local = read_current_auth().map_err(|e| e.to_string())?;
+        let active_changed = crate::auth::t3_sync::preserve_tokens(&mut store, &state.auth, local.as_ref());
+        save_accounts(&store).map_err(|e| e.to_string())?;
+        if active_changed {
+            let active = store.accounts.iter().find(|a| Some(&a.id) == store.active_account_id.as_ref()).unwrap();
+            switch_to_account(active).map_err(|e| e.to_string())?;
+        }
+    }
+
     let account = ensure_chatgpt_tokens_fresh_locked(&store.accounts[target_index])
         .await
         .map_err(|e| e.to_string())?;
 
-    // Write to ~/.codex/auth.json
-    switch_to_account(&account).map_err(|e| e.to_string())?;
+    // Confirm the restarted remote service before marking this account selected.
+    if let (Some(host), Some(state)) = (remote_host.as_deref(), remote_state.as_ref()) {
+        crate::auth::t3_sync::apply(host, &account, state).await.map_err(|e| e.to_string())?;
+    }
+    switch_to_account(&account).map_err(|e| {
+        if remote_host.is_some() { format!("Harness switched, but saving the Mac login failed: {e}. Retry the switch.") }
+        else { e.to_string() }
+    })?;
 
     // Update the active account in our store
     set_active_account(account_id).map_err(|e| e.to_string())?;
