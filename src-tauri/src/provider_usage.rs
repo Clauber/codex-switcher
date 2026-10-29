@@ -11,12 +11,12 @@ use aes_gcm::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::DateTime;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProviderUsage {
     pub id: String,
     pub name: String,
@@ -28,7 +28,7 @@ pub struct ProviderUsage {
     pub updated_at: Option<i64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UsageWindow {
     pub id: String,
     pub label: String,
@@ -40,7 +40,7 @@ pub struct UsageWindow {
     pub details: Vec<UsageDetail>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UsageDetail {
     pub label: String,
     pub used: f64,
@@ -137,6 +137,53 @@ fn should_check_now(entry: &CacheEntry, force: bool) -> bool {
         Instant::now() >= entry.next_allowed
     }
 }
+
+// Last-known usage survives restarts: a successful check lives only in memory
+// otherwise, and providers can fail for hours at a time.
+#[derive(Serialize, Deserialize)]
+struct PersistedProvider {
+    fingerprint: String,
+    usage: ProviderUsage,
+}
+
+fn cache_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".codex-switcher/provider-usage.json"))
+}
+
+fn seedable(persisted: &PersistedProvider, fingerprint: &[u8], now: i64) -> bool {
+    persisted.fingerprint == URL_SAFE_NO_PAD.encode(fingerprint)
+        && persisted
+            .usage
+            .updated_at
+            .is_some_and(|updated| now - updated <= TRAY_STALE_SECS)
+}
+
+fn load_persisted(path: &std::path::Path) -> HashMap<String, PersistedProvider> {
+    let Ok(bytes) = std::fs::read(path) else {
+        return HashMap::new();
+    };
+    serde_json::from_slice::<Vec<PersistedProvider>>(&bytes)
+        .map(|providers| {
+            providers
+                .into_iter()
+                .map(|provider| (provider.usage.id.clone(), provider))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn save_persisted(path: &std::path::Path, providers: &[PersistedProvider]) {
+    let Ok(json) = serde_json::to_vec(providers) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, json).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
 static CACHE: OnceLock<Mutex<UsageCache>> = OnceLock::new();
 
 #[cfg_attr(feature = "desktop-app", tauri::command)]
@@ -154,6 +201,34 @@ pub async fn get_provider_usage(force: Option<bool>) -> Result<Vec<ProviderUsage
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .await;
+    if let Some(path) = cache_path() {
+        let persisted = tokio::task::spawn_blocking(move || load_persisted(&path))
+            .await
+            .unwrap_or_default();
+        let now = chrono::Utc::now().timestamp();
+        for (id, _, credential) in &credentials {
+            if cache.contains_key(id) {
+                continue;
+            }
+            if let Ok(cred) = credential {
+                let fingerprint = Sha256::digest(cred.token.as_bytes()).to_vec();
+                if let Some(persisted) = persisted.get(id) {
+                    if seedable(persisted, &fingerprint, now) {
+                        cache.insert(
+                            id.clone(),
+                            CacheEntry {
+                                fingerprint,
+                                checked_at: Instant::now(),
+                                next_allowed: Instant::now(),
+                                consecutive_errors: 0,
+                                usage: persisted.usage.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
     let results =
         futures::future::join_all(credentials.into_iter().map(|(id, name, credential)| {
             let previous = cache.get(&id);
@@ -220,6 +295,21 @@ pub async fn get_provider_usage(force: Option<bool>) -> Result<Vec<ProviderUsage
             cache.remove(&id);
         }
         usages.push(usage);
+    }
+    // Persist the whole cache state so cache-hit cycles (which refresh nothing)
+    // cannot erase providers from disk.
+    let persisted: Vec<PersistedProvider> = cache
+        .values()
+        .filter(|entry| entry.usage.updated_at.is_some())
+        .map(|entry| PersistedProvider {
+            fingerprint: URL_SAFE_NO_PAD.encode(&entry.fingerprint),
+            usage: entry.usage.clone(),
+        })
+        .collect();
+    if let Some(path) = cache_path() {
+        tokio::task::spawn_blocking(move || save_persisted(&path, &persisted))
+            .await
+            .ok();
     }
     Ok(usages)
 }
@@ -749,6 +839,50 @@ mod tests {
         assert_eq!(error_backoff_secs(Some(900), 0), 900);
         assert_eq!(error_backoff_secs(Some(7200), 0), 7200);
         assert_eq!(error_backoff_secs(Some(0), 1), 600);
+    }
+
+    #[test]
+    fn persisted_usage_survives_a_round_trip_and_rejects_stale_or_foreign_entries() {
+        let path = std::env::temp_dir().join(format!(
+            "csw-usage-test-{}-{}.json",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let usage = ProviderUsage {
+            id: "claude".into(),
+            name: "Claude Code".into(),
+            status: "ready".into(),
+            plan: Some("max".into()),
+            windows: vec![UsageWindow {
+                id: "five_hour".into(),
+                label: "5-hour limit".into(),
+                used_percent: Some(8.0),
+                resets_at: Some(1791331453),
+                used: None,
+                limit: None,
+                unit: None,
+                details: vec![],
+            }],
+            note: None,
+            error: None,
+            updated_at: Some(1000),
+        };
+        let fingerprint = b"token-bytes".to_vec();
+        save_persisted(
+            &path,
+            &[PersistedProvider {
+                fingerprint: URL_SAFE_NO_PAD.encode(&fingerprint),
+                usage: usage.clone(),
+            }],
+        );
+        let loaded = load_persisted(&path);
+        let _ = std::fs::remove_file(&path);
+        let entry = loaded.get("claude").unwrap();
+        assert_eq!(entry.usage.windows[0].used_percent, Some(8.0));
+        assert_eq!(entry.usage.plan.as_deref(), Some("max"));
+        assert!(seedable(entry, &fingerprint, 1000 + TRAY_STALE_SECS));
+        assert!(!seedable(entry, &fingerprint, 1000 + TRAY_STALE_SECS + 1));
+        assert!(!seedable(entry, b"other-token", 1001));
     }
 
     #[test]
