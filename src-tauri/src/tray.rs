@@ -518,6 +518,23 @@ fn active_session_title(active_account_id: Option<&str>) -> Option<String> {
     )
 }
 
+// "Cl 92%", "Cl ~92%" for a last-known value after a failed check, or "Cl --".
+fn provider_title_part(
+    short: &str,
+    provider: &crate::provider_usage::ProviderUsage,
+    now: i64,
+) -> String {
+    let remaining = crate::provider_usage::tray_remaining(provider, now)
+        .map(|value| format!("{value:.0}%"))
+        .unwrap_or_else(|| "--".into());
+    let stale = remaining != "--" && crate::provider_usage::tray_value_is_stale(provider, now);
+    if stale {
+        format!("{short} ~{remaining}")
+    } else {
+        format!("{short} {remaining}")
+    }
+}
+
 fn active_tray_title(active_account_id: Option<&str>, mode: TrayDisplayMode) -> Option<String> {
     if mode == TrayDisplayMode::Hidden { return None; }
     let codex = match mode {
@@ -861,5 +878,35 @@ mod tests {
             active_tray_title(Some("active"), TrayDisplayMode::Hidden),
             None
         );
+    }
+
+    #[test]
+    fn provider_title_part_marks_last_known_values_as_approximate() {
+        let now = 1000;
+        let mut provider = crate::provider_usage::ProviderUsage {
+            id: "claude".into(),
+            name: "Claude Code".into(),
+            status: "ready".into(),
+            plan: None,
+            windows: vec![crate::provider_usage::UsageWindow {
+                id: "five_hour".into(),
+                label: "5-hour limit".into(),
+                used_percent: Some(8.0),
+                resets_at: Some(now + 3600),
+                used: None,
+                limit: None,
+                unit: None,
+                details: vec![],
+            }],
+            note: None,
+            error: None,
+            updated_at: Some(now),
+        };
+        assert_eq!(provider_title_part("Cl", &provider, now), "Cl 92%");
+        provider.status = "error".into();
+        provider.error = Some(
+            "Provider rate limited this check. Automatic retry in five minutes.".into(),
+        );
+        assert_eq!(provider_title_part("Cl", &provider, now), "Cl ~92%");
     }
 }

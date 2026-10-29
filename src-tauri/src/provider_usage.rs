@@ -98,10 +98,48 @@ struct ProviderCredential {
 struct CacheEntry {
     fingerprint: Vec<u8>,
     checked_at: Instant,
+    next_allowed: Instant,
+    consecutive_errors: u32,
     usage: ProviderUsage,
 }
 
 type UsageCache = HashMap<String, CacheEntry>;
+
+// The Claude usage endpoint answers 429 with `retry-after: 0` even when cold, so the
+// backoff below is the only protection the app controls.
+const SUCCESS_TTL_SECS: u64 = 300;
+const FORCE_FLOOR_SECS: u64 = 60;
+const ERROR_BACKOFF_BASE_SECS: u64 = 300;
+const MAX_ERROR_BACKOFF_SECS: u64 = 1800;
+pub const TRAY_FRESH_SECS: i64 = 600;
+pub const TRAY_STALE_SECS: i64 = 3600;
+
+/// Last-known tray values stay displayable for an hour even after a failed check;
+/// `tray_value_is_stale` decides whether they still get the fresh presentation.
+pub fn tray_value_is_stale(provider: &ProviderUsage, now: i64) -> bool {
+    provider.status != "ready"
+        || provider.error.is_some()
+        || provider
+            .updated_at
+            .is_none_or(|updated| now - updated > TRAY_FRESH_SECS)
+}
+
+fn error_backoff_secs(retry_after: Option<u64>, consecutive_errors: u32) -> u64 {
+    let doubling = ERROR_BACKOFF_BASE_SECS
+        .checked_shl(consecutive_errors.min(3))
+        .unwrap_or(MAX_ERROR_BACKOFF_SECS);
+    doubling
+        .min(MAX_ERROR_BACKOFF_SECS)
+        .max(retry_after.unwrap_or(0))
+}
+
+fn should_check_now(entry: &CacheEntry, force: bool) -> bool {
+    if force {
+        entry.checked_at.elapsed() >= Duration::from_secs(FORCE_FLOOR_SECS)
+    } else {
+        Instant::now() >= entry.next_allowed
+    }
+}
 static CACHE: OnceLock<Mutex<UsageCache>> = OnceLock::new();
 
 #[cfg_attr(feature = "desktop-app", tauri::command)]
@@ -168,6 +206,8 @@ pub async fn get_provider_usage() -> Result<Vec<ProviderUsage>, String> {
                 CacheEntry {
                     fingerprint,
                     checked_at: Instant::now(),
+                    next_allowed: Instant::now(),
+                    consecutive_errors: 0,
                     usage: usage.clone(),
                 },
             );
@@ -647,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn tray_summary_uses_the_tighter_plan_window_and_rejects_stale_values() {
+    fn tray_summary_uses_the_tighter_plan_window_and_marks_stale_values() {
         let parsed = parse_claude(&json!({"five_hour":{"utilization":20},"seven_day":{"utilization":65},"extra_usage":{"is_enabled":true,"utilization":99}})).unwrap();
         let mut provider = ProviderUsage {
             id: "claude".into(),
@@ -660,12 +700,49 @@ mod tests {
             updated_at: Some(1000),
         };
         assert_eq!(tray_remaining(&provider, 1001), Some(35.0));
-        assert_eq!(tray_remaining(&provider, 1601), None);
+        assert!(!tray_value_is_stale(&provider, 1001));
+        // A failed follow-up check keeps the last-known value displayable for an hour.
         provider.status = "error".into();
-        assert_eq!(tray_remaining(&provider, 1001), None);
+        provider.error = Some("Provider rate limited this check.".into());
+        assert_eq!(tray_remaining(&provider, 1001), Some(35.0));
+        assert!(tray_value_is_stale(&provider, 1001));
+        assert_eq!(tray_remaining(&provider, 4600), Some(35.0));
+        assert_eq!(tray_remaining(&provider, 4601), None);
         provider.status = "ready".into();
+        provider.error = None;
         provider.windows[0].resets_at = Some(1000);
         assert_eq!(tray_remaining(&provider, 1001), None);
+    }
+
+    #[test]
+    fn error_backoff_doubles_and_honors_retry_after() {
+        assert_eq!(error_backoff_secs(None, 0), 300);
+        assert_eq!(error_backoff_secs(None, 1), 600);
+        assert_eq!(error_backoff_secs(None, 2), 1200);
+        assert_eq!(error_backoff_secs(None, 3), 1800);
+        assert_eq!(error_backoff_secs(None, 8), 1800);
+        assert_eq!(error_backoff_secs(Some(900), 0), 900);
+        assert_eq!(error_backoff_secs(Some(7200), 0), 7200);
+        assert_eq!(error_backoff_secs(Some(0), 1), 600);
+    }
+
+    #[test]
+    fn force_refresh_only_bypasses_the_backoff_after_the_floor() {
+        let entry = CacheEntry {
+            fingerprint: vec![0],
+            checked_at: Instant::now(),
+            next_allowed: Instant::now() + Duration::from_secs(300),
+            consecutive_errors: 0,
+            usage: empty_usage("claude", "Claude Code", ""),
+        };
+        assert!(!should_check_now(&entry, false));
+        assert!(!should_check_now(&entry, true));
+        let aged = CacheEntry {
+            checked_at: entry.checked_at - Duration::from_secs(61),
+            ..entry
+        };
+        assert!(!should_check_now(&aged, false));
+        assert!(should_check_now(&aged, true));
     }
 
     #[test]
