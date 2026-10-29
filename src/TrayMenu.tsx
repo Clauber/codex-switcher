@@ -243,7 +243,7 @@ function TrayMenu() {
   // Manual refresh: re-pull accounts and actively fetch fresh usage once.
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    const providerRefresh = refreshProviders();
+    const providerRefresh = refreshProviders(true);
     try {
       const list = await invokeBackend<AccountInfo[]>("list_accounts");
       setAccounts(list);

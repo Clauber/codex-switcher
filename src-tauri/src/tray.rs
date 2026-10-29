@@ -443,7 +443,7 @@ fn refresh_menu_on_main_thread<R: Runtime>(app: &AppHandle<R>) {
                 eprintln!("Failed to refresh tray menu: {error}");
             }
             refresh_tray_display(&tray, mode, title.as_deref());
-            let _ = tray.set_tooltip(Some("AI Usage Tracker — Cl: Claude, Z: Zcode, Cdx: Codex. Claude/Zcode show the lower remaining 5-hour or weekly quota. Click for all limits."));
+            let _ = tray.set_tooltip(Some("AI Usage Tracker — Cl: Claude, Z: Zcode, Cdx: Codex. Claude/Zcode show the lower remaining 5-hour or weekly quota; ~ marks a last-known value after a failed check. Click for all limits."));
         }
         Err(error) => eprintln!("Failed to build tray menu: {error}"),
     }
@@ -547,9 +547,7 @@ fn active_tray_title(active_account_id: Option<&str>, mode: TrayDisplayMode) -> 
         let now = chrono::Utc::now().timestamp();
         for provider in providers.iter().filter(|p| p.status != "not_connected") {
             let short = match provider.id.as_str() { "claude" => "Cl", "zcode-zai" => "Z", "zcode-bigmodel" => "BM", _ => continue };
-            let remaining = crate::provider_usage::tray_remaining(provider, now)
-                .map(|value| format!("{value:.0}%")).unwrap_or_else(|| "--".into());
-            parts.push(format!("{short} {remaining}"));
+            parts.push(provider_title_part(short, provider, now));
         }
     }
     Some(if parts.is_empty() { "AI Usage".into() } else { parts.join(" · ") })
@@ -729,7 +727,9 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
 
 fn poll_provider_usage<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
-        if let Ok(providers) = tauri::async_runtime::block_on(crate::provider_usage::get_provider_usage()) {
+        if let Ok(providers) =
+            tauri::async_runtime::block_on(crate::provider_usage::get_provider_usage(None))
+        {
             if let Ok(mut cache) = TRAY_PROVIDER_USAGE.lock() { *cache = providers; }
             refresh_menu(&app);
         }

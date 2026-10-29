@@ -47,12 +47,9 @@ pub struct UsageDetail {
 }
 
 pub fn tray_remaining(provider: &ProviderUsage, now: i64) -> Option<f64> {
-    if provider.status != "ready"
-        || provider.error.is_some()
-        || provider
-            .updated_at
-            .is_none_or(|updated| now - updated > 600)
-    {
+    let updated = provider.updated_at?;
+    let age = now - updated;
+    if age < 0 || age > TRAY_STALE_SECS {
         return None;
     }
     let windows = provider
@@ -143,7 +140,8 @@ fn should_check_now(entry: &CacheEntry, force: bool) -> bool {
 static CACHE: OnceLock<Mutex<UsageCache>> = OnceLock::new();
 
 #[cfg_attr(feature = "desktop-app", tauri::command)]
-pub async fn get_provider_usage() -> Result<Vec<ProviderUsage>, String> {
+pub async fn get_provider_usage(force: Option<bool>) -> Result<Vec<ProviderUsage>, String> {
+    let force = force.unwrap_or(false);
     let credentials = tokio::task::spawn_blocking(discover_credentials)
         .await
         .map_err(|_| "Could not read local provider credentials.".to_string())?;
@@ -169,45 +167,52 @@ pub async fn get_provider_usage() -> Result<Vec<ProviderUsage>, String> {
                 let previous = previous.filter(|entry| entry.fingerprint == fingerprint);
                 if let Some(entry) = previous {
                     // Coalesce dashboard windows and manual refreshes; back off after errors.
-                    let ttl = if entry.usage.error.is_some() { 300 } else { 60 };
-                    if entry.checked_at.elapsed() < Duration::from_secs(ttl) {
+                    if !should_check_now(entry, force) {
                         return (id, None, entry.usage.clone());
                     }
                 }
-                let usage = match fetch_usage(client, &credential).await {
-                    Ok(parsed) => ProviderUsage {
-                        id: credential.id,
-                        name: credential.name,
-                        status: "ready".into(),
-                        plan: parsed.plan.or(credential.plan),
-                        windows: parsed.windows,
-                        note: parsed.note,
-                        error: None,
-                        updated_at: Some(chrono::Utc::now().timestamp()),
-                    },
+                let prior_errors = previous.map(|e| e.consecutive_errors).unwrap_or(0);
+                let (usage, next_allowed, consecutive_errors) = match fetch_usage(client, &credential).await {
+                    Ok(parsed) => (
+                        ProviderUsage {
+                            id: credential.id,
+                            name: credential.name,
+                            status: "ready".into(),
+                            plan: parsed.plan.or(credential.plan),
+                            windows: parsed.windows,
+                            note: parsed.note,
+                            error: None,
+                            updated_at: Some(chrono::Utc::now().timestamp()),
+                        },
+                        Instant::now() + Duration::from_secs(SUCCESS_TTL_SECS),
+                        0,
+                    ),
                     Err(error) => {
                         let mut usage = previous
                             .map(|e| e.usage.clone())
                             .unwrap_or_else(|| empty_usage(&id, &name, ""));
                         usage.status = "error".into();
-                        usage.error = Some(error);
-                        usage
+                        usage.error = Some(error.message);
+                        let errors = prior_errors + 1;
+                        let wait =
+                            error_backoff_secs(error.retry_after, errors.saturating_sub(1));
+                        (usage, Instant::now() + Duration::from_secs(wait), errors)
                     }
                 };
-                (id, Some(fingerprint), usage)
+                (id, Some((fingerprint, next_allowed, consecutive_errors)), usage)
             }
         }))
         .await;
     let mut usages = Vec::new();
     for (id, fingerprint, usage) in results {
-        if let Some(fingerprint) = fingerprint {
+        if let Some((fingerprint, next_allowed, consecutive_errors)) = fingerprint {
             cache.insert(
                 id,
                 CacheEntry {
                     fingerprint,
                     checked_at: Instant::now(),
-                    next_allowed: Instant::now(),
-                    consecutive_errors: 0,
+                    next_allowed,
+                    consecutive_errors,
                     usage: usage.clone(),
                 },
             );
@@ -232,10 +237,24 @@ fn empty_usage(id: &str, name: &str, message: &str) -> ProviderUsage {
     }
 }
 
+struct FetchError {
+    message: String,
+    retry_after: Option<u64>,
+}
+
+impl From<String> for FetchError {
+    fn from(message: String) -> Self {
+        FetchError {
+            message,
+            retry_after: None,
+        }
+    }
+}
+
 async fn fetch_usage(
     client: &reqwest::Client,
     credential: &ProviderCredential,
-) -> Result<ParsedUsage, String> {
+) -> Result<ParsedUsage, FetchError> {
     let mut request = client
         .get(credential.url)
         .header("Accept", "application/json");
@@ -249,24 +268,30 @@ async fn fetch_usage(
     let response = request
         .send()
         .await
-        .map_err(|_| "Usage request failed. Check your connection and retry.".to_string())?;
+        .map_err(|_| FetchError::from("Usage request failed. Check your connection and retry.".to_string()))?;
     if !response.status().is_success() {
-        return Err(match response.status().as_u16() {
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok());
+        let message = match response.status().as_u16() {
             401 | 403 => {
                 "Session expired or access denied. Sign in again in the provider app.".into()
             }
-            429 => "Provider rate limited this check. Automatic retry in five minutes.".into(),
+            429 => "Provider rate limited this check. Retrying with a longer wait.".into(),
             code => format!("Provider returned HTTP {code}. Automatic retry in five minutes."),
-        });
+        };
+        return Err(FetchError { message, retry_after });
     }
     let payload: Value = response
         .json()
         .await
-        .map_err(|_| "Provider returned an unreadable usage response.".to_string())?;
+        .map_err(|_| FetchError::from("Provider returned an unreadable usage response.".to_string()))?;
     if credential.id == "claude" {
-        parse_claude(&payload)
+        parse_claude(&payload).map_err(FetchError::from)
     } else {
-        parse_zcode(&payload)
+        parse_zcode(&payload).map_err(FetchError::from)
     }
 }
 
@@ -871,9 +896,43 @@ mod tests {
             .await
             .err()
             .unwrap();
-        assert!(error.contains("Sign in again"));
-        assert!(!error.contains("test-api-key"));
-        assert!(!error.contains("secret-response-body"));
+        assert!(error.message.contains("Sign in again"));
+        assert!(!error.message.contains("test-api-key"));
+        assert!(!error.message.contains("secret-response-body"));
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn rate_limited_responses_carry_the_retry_after_delay() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/usage", server.server_addr());
+        let worker = std::thread::spawn(move || {
+            let request = server.recv().unwrap();
+            request
+                .respond(
+                    tiny_http::Response::from_string("rate limited")
+                        .with_status_code(429)
+                        .with_header(
+                            "Retry-After: 42"
+                                .parse::<tiny_http::Header>()
+                                .unwrap(),
+                        ),
+                )
+                .unwrap();
+        });
+        let credential = ProviderCredential {
+            id: "claude".into(),
+            name: "Claude Code".into(),
+            token: "test-api-key".into(),
+            url: Box::leak(url.into_boxed_str()),
+            plan: None,
+        };
+        let error = fetch_usage(&reqwest::Client::new(), &credential)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.retry_after, Some(42));
+        assert!(error.message.contains("rate limited"));
         worker.join().unwrap();
     }
 }
