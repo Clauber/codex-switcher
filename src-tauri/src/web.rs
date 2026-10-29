@@ -128,7 +128,9 @@ fn handle_request(mut request: Request, runtime: &Runtime, dist_dir: &Path) -> a
 
 async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, String> {
     match command {
-        "get_provider_usage" => to_json(crate::provider_usage::get_provider_usage().await?),
+        "get_provider_usage" => {
+            to_json(crate::provider_usage::get_provider_usage(Some(payload["force"].as_bool().unwrap_or(false))).await?)
+        }
         "list_accounts" => to_json(list_accounts().await?),
         "get_active_account_info" => to_json(get_active_account_info().await?),
         "add_account_from_file" => {

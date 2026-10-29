@@ -30,10 +30,13 @@ export function useProviderUsage() {
   const pending = useRef<Promise<void> | null>(null);
   const mounted = useRef(true);
 
-  const refresh = useCallback((): Promise<void> => {
+  const refresh = useCallback((force?: boolean): Promise<void> => {
     if (pending.current) return pending.current;
     setLoading(true);
-    pending.current = invokeBackend<ProviderUsage[]>("get_provider_usage")
+    pending.current = invokeBackend<ProviderUsage[]>(
+      "get_provider_usage",
+      force ? { force: true } : undefined
+    )
       .then((data) => {
         if (!mounted.current) return;
         setProviders(data);

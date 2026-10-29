@@ -53,7 +53,7 @@ export function ProviderUsagePanel({ providers, loading, error, onRefresh, compa
   providers: ProviderUsage[];
   loading: boolean;
   error: string | null;
-  onRefresh: () => Promise<void>;
+  onRefresh: (force?: boolean) => Promise<void>;
   compact?: boolean;
 }) {
   const [now, setNow] = useState(Date.now);
@@ -69,7 +69,7 @@ export function ProviderUsagePanel({ providers, loading, error, onRefresh, compa
           <h2 id="provider-usage-heading" className="text-base font-semibold">AI usage limits</h2>
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Your connected providers · checks every 5 minutes</p>
         </div>
-        <button onClick={() => void onRefresh()} disabled={loading} className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium hover:bg-gray-100 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-800">
+        <button onClick={() => void onRefresh(true)} disabled={loading} className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium hover:bg-gray-100 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-800">
           {loading ? "Checking…" : "Refresh limits"}
         </button>
       </div>}
